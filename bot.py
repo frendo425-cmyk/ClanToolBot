@@ -3,17 +3,17 @@ import datetime
 import disnake
 from disnake.ext import commands
 from disnake.ui import View, Modal, TextInput
-import os
-from dotenv import load_dotenv
 
-load_dotenv()
 
-# Конфигурация
+# Конфигурация (исправлено: все ID должны быть int)
 TARGET_CHANNEL_ID = 1465097766706348075  # ID канала для заявок
 ADMIN_ROLE_ID = 1448495553532137543  # ID роли администратора
-CREATE_VOICE_CHANNEL_IDS = 1462838870516174882  # Триггер-каналы
-TEMP_VOICE_CATEGORY_IDS = 1462840174672220432  # Категории для голосовых
-WELCOME_ROLE_IDS = 1452023161980846081  # Роли для новых участников
+# Исправлено: добавлены квадратные скобки для списка
+CREATE_VOICE_CHANNEL_IDS = [1462838870516174882]  # Триггер-каналы
+# Исправлено: добавлены квадратные скобки для списка
+TEMP_VOICE_CATEGORY_IDS = [1462840174672220432]  # Категории для голосовых
+# Исправлено: добавлены квадратные скобки для списка
+WELCOME_ROLE_IDS = [1452023161980846081 ]  # Роли для новых участников
 
 # Список отрядов
 SQUADS = [
@@ -32,7 +32,7 @@ bot = commands.Bot(
     test_guilds=[1448254046749327406, 1459716408953929799]
 )
 
-# Хранилище для временных голосовых каналов 
+# Хранилище для временных голосовых каналов
 bot.temp_channels = {}
 
 
@@ -84,7 +84,8 @@ class ApplicationModal(Modal):
         ]
         super().__init__(title="📝 Заявка в отряд", components=components, custom_id="application_modal")
 
-    async def callback(self, interaction: disnake.MessageInteraction):
+    async def callback(self,
+                       interaction: disnake.ModalInteraction):  # Исправлено: ModalInteraction вместо MessageInteraction
         nickname = interaction.text_values.get("nickname", "")
         real_name = interaction.text_values.get("real_name", "")
         kd_ratio = interaction.text_values.get("kd_ratio", "")
@@ -288,7 +289,7 @@ class RejectReasonModal(Modal):
         ]
         super().__init__(title="📝 Причина отказа", components=components, custom_id="reject_reason_modal")
 
-    async def callback(self, interaction: disnake.MessageInteraction):
+    async def callback(self, interaction: disnake.ModalInteraction):  # Исправлено: ModalInteraction
         reason = interaction.text_values.get("reason", "")
 
         embed = self.message.embeds[0]
@@ -359,7 +360,7 @@ class KickReasonModal(Modal):
         ]
         super().__init__(title="👢 Причина кика", components=components, custom_id="kick_reason_modal")
 
-    async def callback(self, interaction: disnake.MessageInteraction):
+    async def callback(self, interaction: disnake.ModalInteraction):  # Исправлено: ModalInteraction
         reason = interaction.text_values.get("reason", "")
 
         embed = self.message.embeds[0]
@@ -414,6 +415,11 @@ async def on_ready():
         activity=disnake.Game(name="Основные команды: !help")
     )
 
+    # Регистрируем персистентные view
+    bot.add_view(ApplicationView())
+    bot.add_view(AdminDecisionView(0))
+    bot.add_view(KickView(0, 0))
+
 
 @bot.event
 async def on_member_join(member):
@@ -427,7 +433,7 @@ async def on_member_join(member):
 
         # Добавляем все роли из списка
         for role_id in WELCOME_ROLE_IDS:
-            role = disnake.utils.get(member.guild.roles, id=role_id)
+            role = member.guild.get_role(role_id)
             if role:
                 await member.add_roles(role)
 
@@ -455,26 +461,24 @@ async def on_member_join(member):
 async def on_voice_state_update(member, before, after):
     """Создание временных голосовых каналов"""
     try:
-        # Ищем подходящую категорию для гильдии
-        category = None
-        for category_id in TEMP_VOICE_CATEGORY_IDS:
-            cat = disnake.utils.get(member.guild.categories, id=category_id)
-            if cat:
-                category = cat
-                break
-
-        if not category:
-            return
-
         # Проверка: пользователь зашел в триггер-канал
         if after.channel and after.channel.id in CREATE_VOICE_CHANNEL_IDS:
             # Проверяем права (исключаем админов/модераторов)
-            admin_role = disnake.utils.get(member.guild.roles, name="Admin")
-            moderator_role = disnake.utils.get(member.guild.roles, name="Moderator")
+            admin_role = member.guild.get_role(ADMIN_ROLE_ID)
 
             if admin_role and admin_role in member.roles:
                 return
-            if moderator_role and moderator_role in member.roles:
+
+            # Ищем подходящую категорию для гильдии
+            category = None
+            for category_id in TEMP_VOICE_CATEGORY_IDS:
+                cat = member.guild.get_channel(category_id)
+                if cat:
+                    category = cat
+                    break
+
+            if not category:
+                print(f"Категория не найдена для ID: {TEMP_VOICE_CATEGORY_IDS}")
                 return
 
             channel_name = f"🎤 {member.name}"
@@ -544,10 +548,12 @@ async def on_voice_state_update(member, before, after):
             if len(before.channel.members) == 0:
                 await asyncio.sleep(60)
 
-                if len(before.channel.members) == 0:
-                    await before.channel.delete(reason="Автоматическое удаление пустой комнаты")
-                    if before.channel.id in bot.temp_channels:
+                if len(before.channel.members) == 0 and before.channel.id in bot.temp_channels:
+                    try:
+                        await before.channel.delete(reason="Автоматическое удаление пустой комнаты")
                         del bot.temp_channels[before.channel.id]
+                    except Exception as e:
+                        print(f"Ошибка при удалении канала: {e}")
 
     except Exception as e:
         print(f"Error in voice channel creation: {e}")
@@ -604,6 +610,8 @@ async def on_message(message: disnake.Message):
 
                     try:
                         await message.delete()
+                        await message.channel.send(f"{message.author.mention}, скриншот отправлен в заявку!",
+                                                   delete_after=5)
                     except:
                         pass
 
@@ -613,7 +621,7 @@ async def on_message(message: disnake.Message):
 # ================ КОМАНДЫ ГЛОСОВЫХ КАНАЛОВ ================
 
 @bot.slash_command(name="name", description="Изменить название голосовой комнаты")
-async def voice_name(inter, name: str):
+async def voice_name(inter: disnake.ApplicationCommandInteraction, name: str):
     if not inter.author.voice:
         await inter.response.send_message("❌ Вы должны быть в голосовой комнате!", ephemeral=True)
         return
@@ -633,7 +641,7 @@ async def voice_name(inter, name: str):
 
 
 @bot.slash_command(name="limit", description="Установить лимит пользователей в комнате")
-async def voice_limit(inter, limit: int = commands.Range[1, 99]):
+async def voice_limit(inter: disnake.ApplicationCommandInteraction, limit=commands.Range[int, 1, 99]):
     if not inter.author.voice:
         await inter.response.send_message("❌ Вы должны быть в голосовой комнате!", ephemeral=True)
         return
@@ -653,7 +661,7 @@ async def voice_limit(inter, limit: int = commands.Range[1, 99]):
 
 
 @bot.slash_command(name="invite", description="Пригласить пользователя в вашу комнату")
-async def voice_invite(inter, user: disnake.Member):
+async def voice_invite(inter: disnake.ApplicationCommandInteraction, user: disnake.Member):
     if not inter.author.voice:
         await inter.response.send_message("❌ Вы должны быть в голосовой комнате!", ephemeral=True)
         return
@@ -679,7 +687,7 @@ async def voice_invite(inter, user: disnake.Member):
 
 
 @bot.slash_command(name="lock", description="Закрыть комнату от новых подключений")
-async def voice_lock(inter):
+async def voice_lock(inter: disnake.ApplicationCommandInteraction):
     if not inter.author.voice:
         await inter.response.send_message("❌ Вы должны быть в голосовой комнате!", ephemeral=True)
         return
@@ -698,12 +706,13 @@ async def voice_lock(inter):
     await voice_channel.set_permissions(inter.guild.default_role, overwrite=overwrite)
 
     bot.temp_channels[voice_channel.id]["is_locked"] = True
-    await voice_channel.edit(name=f"🔒 {voice_channel.name}")
+    current_name = voice_channel.name.replace("🔒 ", "")
+    await voice_channel.edit(name=f"🔒 {current_name}")
     await inter.response.send_message("✅ Комната закрыта от новых подключений!", ephemeral=True)
 
 
 @bot.slash_command(name="unlock", description="Открыть комнату для подключений")
-async def voice_unlock(inter):
+async def voice_unlock(inter: disnake.ApplicationCommandInteraction):
     if not inter.author.voice:
         await inter.response.send_message("❌ Вы должны быть в голосовой комнате!", ephemeral=True)
         return
@@ -753,21 +762,21 @@ async def clear_error(ctx, error):
 
 @bot.slash_command(description="Кикнуть пользователя")
 @commands.has_permissions(kick_members=True)
-async def kick(inter, member: disnake.Member, reason: str = "Форзификация"):
+async def kick(inter: disnake.ApplicationCommandInteraction, member: disnake.Member, reason: str = "Форзификация"):
     await member.kick(reason=reason)
     await inter.response.send_message(f'✅ {member.mention} был кикнут. Причина: {reason}')
 
 
 @bot.slash_command(description="Забанить пользователя")
 @commands.has_permissions(ban_members=True)
-async def ban(inter, member: disnake.Member, reason: str = "Форзификация"):
+async def ban(inter: disnake.ApplicationCommandInteraction, member: disnake.Member, reason: str = "Форзификация"):
     await member.ban(reason=reason)
     await inter.response.send_message(f'🚫 {member.mention} был забанен. Причина: {reason}')
 
 
 @kick.error
 @ban.error
-async def admin_error(inter, error):
+async def admin_error(inter: disnake.ApplicationCommandInteraction, error):
     if isinstance(error, commands.MissingPermissions):
         await inter.response.send_message("❌ У вас нет прав для использования этой команды!", ephemeral=True)
 
@@ -795,7 +804,7 @@ async def mute(
 
 
 @bot.slash_command(description="Обычный Калькулятор!")
-async def calc(inter, a: int, oper: str, b: int):
+async def calc(inter: disnake.ApplicationCommandInteraction, a: int, oper: str, b: int):
     if oper == "+":
         result = a + b
     elif oper == "-":
@@ -850,7 +859,6 @@ async def recruit_panel(
         value="""• **K/D 0.5 и выше**
 • **Обязательный онлайн на турнирах, потасовки по возможности**
 • **Мастерский шмот от +10 до +15**""",
-
         inline=False
     )
 
@@ -889,7 +897,7 @@ async def recruit_panel(
 )
 async def review_applications(
         ctx: disnake.ApplicationCommandInteraction,
-        статус: str = commands.Param(
+        status: str = commands.Param(
             default="ожидание",
             choices=["все", "ожидание", "принятые", "отклоненные", "кикнутые"]
         )
@@ -914,19 +922,19 @@ async def review_applications(
     filtered_apps = []
     for msg, embed in apps:
         title = embed.title
-        if статус == "все":
+        if status == "все":
             filtered_apps.append((msg, embed))
-        elif статус == "ожидание" and "НОВАЯ ЗАЯВКА" in title:
+        elif status == "ожидание" and "НОВАЯ ЗАЯВКА" in title:
             filtered_apps.append((msg, embed))
-        elif статус == "принятые" and "ПРИНЯТА" in title:
+        elif status == "принятые" and "ПРИНЯТА" in title:
             filtered_apps.append((msg, embed))
-        elif статус == "отклоненные" and "ОТКЛОНЕНА" in title:
+        elif status == "отклоненные" and "ОТКЛОНЕНА" in title:
             filtered_apps.append((msg, embed))
-        elif статус == "кикнутые" and "КИКНУТ" in title:
+        elif status == "кикнутые" and "КИКНУТ" in title:
             filtered_apps.append((msg, embed))
 
     embed = disnake.Embed(
-        title=f"📋 Заявки ({статус})",
+        title=f"📋 Заявки ({status})",
         description=f"Найдено: {len(filtered_apps)} из {len(apps)}",
         color=disnake.Color.blue()
     )
@@ -957,7 +965,7 @@ async def review_applications(
 )
 async def find_application(
         ctx: disnake.ApplicationCommandInteraction,
-        запрос: str = commands.Param(description="Ник или часть информации для поиска")
+        query: str = commands.Param(description="Ник или часть информации для поиска")
 ):
     await ctx.response.defer()
 
@@ -971,16 +979,16 @@ async def find_application(
         if message.embeds and "ЗАЯВКА" in message.embeds[0].title:
             embed = message.embeds[0]
             for field in embed.fields:
-                if запрос.lower() in field.value.lower():
+                if query.lower() in field.value.lower():
                     found_apps.append((message, embed))
                     break
 
     if not found_apps:
-        await ctx.edit_original_response(content=f"❌ Заявки по запросу '{запрос}' не найдены.")
+        await ctx.edit_original_response(content=f"❌ Заявки по запросу '{query}' не найдены.")
         return
 
     embed = disnake.Embed(
-        title=f"🔍 Результаты поиска: '{запрос}'",
+        title=f"🔍 Результаты поиска: '{query}'",
         description=f"Найдено: {len(found_apps)}",
         color=disnake.Color.green()
     )
@@ -1019,7 +1027,7 @@ async def help_command(inter: disnake.ApplicationCommandInteraction):
         name="👥 **Общие команды**",
         value="""`/calc` - Калькулятор
 `/ping` - Проверка пинга
-`!help` - Эта справка""",
+`/help` - Эта справка""",
         inline=False
     )
 
@@ -1027,7 +1035,7 @@ async def help_command(inter: disnake.ApplicationCommandInteraction):
     if inter.author.guild_permissions.manage_messages:
         embed.add_field(
             name="⚙️ **Команды модерации**",
-            value="""`/clear [кол-во]` - Очистка сообщений
+            value="""`!clear [кол-во]` - Очистка сообщений
 `/kick @пользователь [причина]` - Кик пользователя
 `/ban @пользователь [причина]` - Бан пользователя
 `/mute @пользователь [минуты] [причина]` - Мут пользователя""",
@@ -1073,7 +1081,7 @@ async def help_command(inter: disnake.ApplicationCommandInteraction):
 
 
 if __name__ == "__main__":
-    token = os.getenv("DISCORD_BOT_TOKEN")
+    token =("BOT_TOKEN")
     if not token:
         print("❌ Токен бота не найден в переменных окружения!")
         exit(1)
